@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# paper trading (estado da carteira fictícia)
+/paper-account.json
+
+# tooling local (Claude Code)
+/.claude/
