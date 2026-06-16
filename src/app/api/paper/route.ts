@@ -1,25 +1,15 @@
-// Rota de API do paper trading ao vivo.
-//  - GET  -> estado atual da carteira (sem alterar nada)
-//  - POST -> { action: "start" | "tick" | "stop" | "reset", ... }
+// Rota de API do paper trading ao vivo (SEM ESTADO no servidor).
+// O estado da carteira é mantido pelo cliente (localStorage) e enviado aqui.
+//  - POST { action: "start", ...config } -> cria e devolve uma carteira nova
+//  - POST { action: "tick", account }    -> processa e devolve a carteira
+// Pausar/encerrar são feitos no cliente (não precisam do servidor).
 
 import { NextRequest, NextResponse } from "next/server";
-import {
-  loadAccount,
-  saveAccount,
-  resetAccount,
-  startAccount,
-  processTick,
-  PaperConfig,
-} from "@/lib/paper";
+import { startAccount, processTick, PaperConfig, PaperAccount } from "@/lib/paper";
 import { getStrategyMeta, defaultParams } from "@/lib/strategies.meta";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-export async function GET() {
-  const account = await loadAccount();
-  return NextResponse.json({ account });
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -33,7 +23,6 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Estratégia inválida." }, { status: 400 });
       }
 
-      // Aceita lista de tickers (ou um único, por compatibilidade).
       const rawTickers: string[] = Array.isArray(body.tickers)
         ? body.tickers
         : body.ticker
@@ -77,24 +66,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "tick") {
-      const acc = await loadAccount();
-      if (!acc) return NextResponse.json({ account: null });
-      const account = await processTick(acc);
-      return NextResponse.json({ account });
-    }
-
-    if (action === "stop") {
-      const acc = await loadAccount();
-      if (acc) {
-        acc.running = false;
-        await saveAccount(acc);
+      const account = body.account as PaperAccount | null;
+      if (!account || !account.config) {
+        return NextResponse.json({ account: null });
       }
-      return NextResponse.json({ account: acc });
-    }
-
-    if (action === "reset") {
-      await resetAccount();
-      return NextResponse.json({ account: null });
+      const updated = await processTick(account);
+      return NextResponse.json({ account: updated });
     }
 
     return NextResponse.json({ error: "Ação inválida." }, { status: 400 });

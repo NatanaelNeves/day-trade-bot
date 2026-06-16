@@ -1,16 +1,19 @@
-// Motor de "paper trading" ao vivo — agora um PORTFÓLIO de vários ativos.
+// Motor de "paper trading" ao vivo — PORTFÓLIO de vários ativos.
 // Carteira FICTÍCIA que roda a mesma estratégia em cada ativo, em tempo real.
-// O estado é guardado num arquivo JSON, sobrevivendo a recarregamentos.
 //
-// Tempo real: a página chama /api/paper (ação "tick") a cada poucos segundos.
-// Cada tick busca os candles recentes de cada ativo, processa os candles que
-// FECHARAM desde o último tick (gerando ordens) e marca a mercado o patrimônio.
+// IMPORTANTE: este motor é SEM ESTADO no servidor (stateless). O estado da
+// carteira vive no NAVEGADOR (localStorage) e é enviado a cada "tick". Isso é
+// necessário para rodar em ambientes serverless (ex.: Vercel), onde o sistema
+// de arquivos é somente-leitura. As funções abaixo só recebem/devolvem dados.
+//
+// Tempo real: a página chama /api/paper (ação "tick") a cada poucos segundos,
+// enviando a carteira atual. Cada tick busca os candles recentes de cada ativo,
+// processa os candles que FECHARAM desde o último tick (gerando ordens) e marca
+// a mercado o patrimônio, devolvendo a carteira atualizada.
 //
 // Tamanho de posição: cada compra usa uma fração do PATRIMÔNIO (allocationPct),
-// limitada pelo caixa disponível. Ex.: 25% permite até ~4 posições simultâneas.
+// limitada pelo caixa disponível.
 
-import fs from "fs/promises";
-import path from "path";
 import { Candle } from "./types";
 import { fetchCandles } from "./data";
 import { generateSignals } from "./strategies";
@@ -58,31 +61,7 @@ export interface PaperAccount {
   createdAt: number;
 }
 
-const FILE = path.join(process.cwd(), "paper-account.json");
 const nowSec = () => Math.floor(Date.now() / 1000);
-
-// --- Persistência -------------------------------------------------------
-
-export async function loadAccount(): Promise<PaperAccount | null> {
-  try {
-    const raw = await fs.readFile(FILE, "utf8");
-    return JSON.parse(raw) as PaperAccount;
-  } catch {
-    return null;
-  }
-}
-
-export async function saveAccount(acc: PaperAccount): Promise<void> {
-  await fs.writeFile(FILE, JSON.stringify(acc), "utf8");
-}
-
-export async function resetAccount(): Promise<void> {
-  try {
-    await fs.unlink(FILE);
-  } catch {
-    /* arquivo já não existe */
-  }
-}
 
 // --- Cálculos -----------------------------------------------------------
 
@@ -180,7 +159,7 @@ function isMarketLikelyOpen(): boolean {
   return h >= 13 && h <= 20.1;
 }
 
-// --- API do motor -------------------------------------------------------
+// --- API do motor (stateless) -------------------------------------------
 
 export async function startAccount(
   config: PaperConfig,
@@ -208,7 +187,7 @@ export async function startAccount(
     if (live.time > maxLiveTime) maxLiveTime = live.time;
   }
 
-  const acc: PaperAccount = {
+  return {
     config,
     initialCapital,
     cash: initialCapital,
@@ -222,8 +201,6 @@ export async function startAccount(
     marketNote: isMarketLikelyOpen() ? null : "Mercado provavelmente fechado.",
     createdAt: nowSec(),
   };
-  await saveAccount(acc);
-  return acc;
 }
 
 export async function processTick(acc: PaperAccount): Promise<PaperAccount> {
@@ -262,7 +239,8 @@ export async function processTick(acc: PaperAccount): Promise<PaperAccount> {
       applyRisk(acc, t, c);
       const sig = signals[i];
       if (sig === "BUY") openPosition(acc, t, c.close, c.time);
-      else if (sig === "SELL") closePosition(acc, t, c.close, c.time, "Sinal de venda");
+      else if (sig === "SELL")
+        closePosition(acc, t, c.close, c.time, "Sinal de venda");
       acc.lastProcessedCandleTime[t] = c.time;
     }
 
@@ -282,6 +260,5 @@ export async function processTick(acc: PaperAccount): Promise<PaperAccount> {
       : "Mercado provavelmente fechado — preços parados até o próximo pregão.";
   }
 
-  await saveAccount(acc);
   return acc;
 }

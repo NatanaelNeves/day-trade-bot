@@ -24,6 +24,7 @@ import {
 } from "@/components/ui";
 
 const POLL_MS = 20000;
+const PAPER_KEY = "daytradebot:paper";
 
 const brl = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -200,47 +201,62 @@ export default function PaperPage() {
     );
   }
 
+  // Guarda a carteira no navegador (localStorage) — fonte da verdade no cliente.
+  const persist = useCallback((acc: PaperAccount | null) => {
+    setAccount(acc);
+    try {
+      if (acc) localStorage.setItem(PAPER_KEY, JSON.stringify(acc));
+      else localStorage.removeItem(PAPER_KEY);
+    } catch {
+      /* ignora */
+    }
+  }, []);
+
+  // Carga inicial a partir do localStorage.
   useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch("/api/paper");
-        const data = await res.json();
-        const acc = data.account ?? null;
-        prevOrderCountRef.current = acc ? acc.orders.length : null;
-        setAccount(acc);
-      } catch {
-        /* ignora */
-      }
-    })();
+    try {
+      const raw = localStorage.getItem(PAPER_KEY);
+      const acc = raw ? (JSON.parse(raw) as PaperAccount) : null;
+      prevOrderCountRef.current = acc ? acc.orders.length : null;
+      setAccount(acc);
+    } catch {
+      /* ignora */
+    }
   }, []);
 
   const tick = useCallback(async () => {
     if (tickingRef.current) return;
+    let current: PaperAccount | null = null;
+    try {
+      const raw = localStorage.getItem(PAPER_KEY);
+      current = raw ? (JSON.parse(raw) as PaperAccount) : null;
+    } catch {
+      current = null;
+    }
+    if (!current || !current.running) return;
     tickingRef.current = true;
     try {
       const res = await fetch("/api/paper", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "tick" }),
+        body: JSON.stringify({ action: "tick", account: current }),
       });
       const data = await res.json();
-      if (res.ok) {
-        const acc = data.account ?? null;
-        if (acc) {
-          const prev = prevOrderCountRef.current;
-          if (prev != null && acc.orders.length > prev) {
-            acc.orders.slice(prev).forEach(notifyOrder);
-          }
-          prevOrderCountRef.current = acc.orders.length;
+      if (res.ok && data.account) {
+        const acc = data.account as PaperAccount;
+        const prev = prevOrderCountRef.current;
+        if (prev != null && acc.orders.length > prev) {
+          acc.orders.slice(prev).forEach(notifyOrder);
         }
-        setAccount(acc);
+        prevOrderCountRef.current = acc.orders.length;
+        persist(acc);
       }
     } catch {
       /* ignora falha isolada */
     } finally {
       tickingRef.current = false;
     }
-  }, [notifyOrder]);
+  }, [notifyOrder, persist]);
 
   useEffect(() => {
     if (!account?.running) return;
@@ -271,7 +287,7 @@ export default function PaperPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Erro ao iniciar.");
       prevOrderCountRef.current = data.account?.orders.length ?? 0;
-      setAccount(data.account);
+      persist(data.account);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro inesperado.");
     } finally {
@@ -279,26 +295,14 @@ export default function PaperPage() {
     }
   }
 
-  async function stop() {
-    const res = await fetch("/api/paper", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "stop" }),
-    });
-    const data = await res.json();
-    const acc = data.account ?? null;
-    prevOrderCountRef.current = acc ? acc.orders.length : null;
-    setAccount(acc);
+  function stop() {
+    if (!account) return;
+    persist({ ...account, running: false });
   }
 
-  async function reset() {
-    await fetch("/api/paper", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "reset" }),
-    });
+  function reset() {
     prevOrderCountRef.current = null;
-    setAccount(null);
+    persist(null);
   }
 
   const suggested = tickers.length > 0 ? Math.floor(100 / tickers.length) : 100;
